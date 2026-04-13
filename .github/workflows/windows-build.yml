@@ -1,0 +1,80 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Qt
+        uses: jurplel/setup-qt@v5
+        with:
+          version: 6.7.0
+          components: qtbase qttools
+          host: windows
+          target: win64_mingw
+
+      - name: Configure
+        run: |
+          qmake -version
+          qmake QtAuthNet.pro -spec win32-g++
+
+      - name: Build
+        run: |
+          mingw32-make -j${{ env.NUMBER_OF_PROCESSORS }}
+
+      - name: Deploy
+        run: |
+          windeployqt --release release/QtAuthNet.exe || true
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QtAuthNet-Windows-x64
+          path: release/
+          retention-days: 30
+
+  build-linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Qt
+        uses: jurplel/setup-qt@v5
+        with:
+          version: 6.7.0
+          components: qtbase qttools
+          host: linux
+          target: linux
+
+      - name: Install dependencies (Linux build)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgl1-mesa-dev
+
+      - name: Configure (Linux)
+        run: |
+          qmake -version
+          qmake QtAuthNet.pro
+
+      - name: Build (Linux)
+        run: |
+          make -j${{ env.NUMBER_OF_PROCESSORS }}
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QtAuthNet-Linux
+          path: release/
+          retention-days: 30
