@@ -2,6 +2,7 @@
 #include "qtauthnet_global.h"
 #include <QtCore/QObject>
 #include <QtCore/QString>
+#include <QtCore/QMap>
 #include <functional>
 
 class QNetworkAccessManager;
@@ -15,17 +16,13 @@ public:
     explicit Client(const QString& baseUrl, QObject* parent = nullptr);
     ~Client();
 
-    // 认证设置
     void setBearerToken(const QString& token);
     void setBasicAuth(const QString& username, const QString& password);
     void setApiKey(const QString& key, const QString& location = QStringLiteral("header"));
     void setHeader(const QString& key, const QString& value);
-
-    // Token 刷新回调
     using RefreshCallback = std::function<QString()>;
     void setTokenRefreshCallback(RefreshCallback callback);
 
-    // 请求方法
     void get(const QString& path, const std::function<void(const QByteArray&)>& callback);
     void post(const QString& path, const QByteArray& body,
               const std::function<void(const QByteArray&)>& callback);
@@ -35,7 +32,6 @@ public:
              const std::function<void(const QByteArray&)>& callback);
     void deleteResource(const QString& path,
                         const std::function<void(const QByteArray&)>& callback);
-
     void cancel();
 
 signals:
@@ -47,7 +43,10 @@ private slots:
 private:
     void executeRequest(const QString& method, const QString& path,
                         const QByteArray& body,
-                        const std::function<void(const QByteArray&)>& callback);
+                        const std::function<void(const QByteArray&)>& callback,
+                        const QString& contentType = QString());
+
+    QUrl resolvePath(const QString& path) const;
 
     class Private;
     Private* d;
