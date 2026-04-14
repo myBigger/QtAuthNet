@@ -14,35 +14,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Qt
-        uses: fremycompany/install-qt@v3
+      - name: Install Qt (MSVC)
+        uses: jurplel/install-qt-action@v4
         with:
-          version: "6.7.0"
-          tools: "Tools.Mingw64"
-          host: "windows"
-          target: "desktop"
-          arch: "win64_mingw"
-          install-deps: true
+          version: 6.7.0
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
           cache: true
 
       - name: Configure
         shell: bash
         run: |
-          export PATH="$Qt6_Dir/bin:$PATH"
+          export PATH="$QT_BIN_DIR:$PATH"
           qmake -version
-          qmake QtAuthNet.pro -spec win32-g++
 
       - name: Build
         shell: bash
         run: |
-          export PATH="$Qt6_Dir/bin:$PATH"
-          mingw32-make -j${{ env.NUMBER_OF_PROCESSORS }}
+          export PATH="$QT_BIN_DIR:$PATH"
+          qmake QtAuthNet.pro -spec win32-msvc
+          jom || nmake || mingw32-make -j${{ env.NUMBER_OF_PROCESSORS }}
 
       - name: Deploy
         shell: bash
         run: |
-          export PATH="$Qt6_Dir/bin:$PATH"
-          windeployqt --release release/QtAuthNet.exe || echo "windeployqt done"
+          export PATH="$QT_BIN_DIR:$PATH"
+          windeployqt --release release/ || echo "done"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -57,14 +55,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Qt
-        uses: fremycompany/install-qt@v3
+      - name: Install Qt (GCC)
+        uses: jurplel/install-qt-action@v4
         with:
-          version: "6.7.0"
-          host: "linux"
-          target: "desktop"
-          arch: "gcc_64"
-          install-deps: true
+          version: 6.7.0
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
           cache: true
 
       - name: Install build deps
@@ -73,14 +70,14 @@ jobs:
       - name: Configure
         shell: bash
         run: |
-          export PATH="$Qt6_Dir/bin:$PATH"
+          export PATH="$QT_BIN_DIR:$PATH"
           qmake -version
-          qmake QtAuthNet.pro
 
       - name: Build
         shell: bash
         run: |
-          export PATH="$Qt6_Dir/bin:$PATH"
+          export PATH="$QT_BIN_DIR:$PATH"
+          qmake QtAuthNet.pro
           make -j${{ env.NUMBER_OF_PROCESSORS }}
 
       - name: Upload Artifact
