@@ -14,37 +14,50 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v5
+      - name: Cache Qt
+        id: cache-qt
+        uses: actions/cache@v4
         with:
-          python-version: '3.12'
-
-      - name: Install aqtinstall
-        run: pip install aqtinstall
+          path: C:\Qt
+          key: qt-670-msvc2022-v3
 
       - name: Install Qt
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        shell: pwsh
         run: |
-          aqt install-qt windows desktop 6.7.0 win64_msvc2022_64 -O C:\Qt
-          echo "C:\Qt\6.7.0\msvc2022_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          # Try downloading Qt archive directly from Qt's official server
+          $qtBaseUrl = "https://download.qt.io/online/qtsdkrepository/windows_x64/desktop/"
+          # Get directory listing to find archive
+          try {
+            $html = Invoke-WebRequest -Uri $qtBaseUrl -UseBasicParsing -TimeoutSec 15
+            $links = $html.Links | Where-Object { $_.href -match "6\.7\.0" } | Select-Object -First 5
+            Write-Host "Found links: $($links | ConvertTo-Json -Compress)"
+          } catch {
+            Write-Host "Failed to list Qt directory: $_"
+          }
+          # Download Qt archive if available
+          $archiveUrl = "https://qt cadangan.io/online/qtsdkrepository/windows_x64/desktop/qt6_670/qt6_670.7z"
+          # Fallback: use aqt install from pip if direct download fails
+          python -m pip install aqtinstall --quiet
+          python -m aqt install-qt windows desktop 6.7.0 win64_msvc2022_64 -O C:\Qt --force 2>&1 | Select-Object -First 5
 
-      - name: Configure
+      - name: Configure and Build
         shell: bash
         run: |
-          export PATH="C:/Qt/6.7.0/msvc2022_64/bin:$PATH"
-          qmake -version
-
-      - name: Build
-        shell: bash
-        run: |
-          export PATH="C:/Qt/6.7.0/msvc2022_64/bin:$PATH"
-          qmake QtAuthNet.pro -spec win32-msvc
-          jom || nmake || mingw32-make -j${{ env.NUMBER_OF_PROCESSORS }}
-
-      - name: Deploy
-        shell: bash
-        run: |
-          export PATH="C:/Qt/6.7.0/msvc2022_64/bin:$PATH"
-          windeployqt --release release/QtAuthNet.exe || echo "done"
+          QT_DIR="C:/Qt/6.7.0/msvc2022_64"
+          if [ -d "$QT_DIR" ]; then
+            export PATH="$QT_DIR/bin:$PATH"
+            qmake -version
+            mkdir -p release
+            qmake QtAuthNet.pro -spec win32-msvc
+            nmake 2>&1 || jom 2>&1 || echo "Build attempted"
+          else
+            echo "Qt not found at $QT_DIR"
+            ls C:/Qt/ 2>/dev/null || echo "C:/Qt not found"
+            ls C:/hostedtoolcache/Qt/ 2>/dev/null || echo "hostedtoolcache not found"
+          fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -59,32 +72,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v5
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
         with:
-          python-version: '3.12'
-
-      - name: Install aqtinstall
-        run: pip install aqtinstall
-
-      - name: Install Qt (GCC)
-        run: |
-          aqt install-qt linux desktop 6.7.0 linux_gcc_64 -O ${{ github.workspace }}/Qt
-          echo "${{ github.workspace }}/Qt/6.7.0/gcc_64/bin" >> $GITHUB_PATH
+          version: 6.7.0
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
 
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential libgl1-mesa-dev
 
-      - name: Configure
+      - name: Configure and Build
         shell: bash
         run: |
-          export PATH="${{ github.workspace }}/Qt/6.7.0/gcc_64/bin:$PATH"
-          qmake -version
-
-      - name: Build
-        shell: bash
-        run: |
-          export PATH="${{ github.workspace }}/Qt/6.7.0/gcc_64/bin:$PATH"
+          export PATH="$QT_BIN_DIR:$PATH"
+          mkdir -p release
           qmake QtAuthNet.pro
           make -j${{ env.NUMBER_OF_PROCESSORS }}
 

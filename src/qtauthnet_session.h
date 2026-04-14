@@ -2,8 +2,11 @@
 #include "qtauthnet_global.h"
 #include <QtCore/QObject>
 #include <QtCore/QString>
-#include <QtCore/QStringList>
 #include <functional>
+
+class QNetworkAccessManager;
+class QNetworkReply;
+class QTimer;
 
 namespace QtAuthNet {
 
@@ -13,21 +16,17 @@ public:
     explicit CasSession(const QString& casUrl, QObject* parent = nullptr);
     ~CasSession();
 
-    // CAS 登录
     void login(const QString& username, const QString& password,
-               const std::function<void(bool success)>& callback);
+               const std::function<void(bool)>& callback);
 
-    // 查询登录状态
     bool isLoggedIn() const;
 
-    // 登出
     void logout();
 
-    // 手动续期
     void renew(const std::function<void(bool)>& callback);
 
-    // 会话获取（CAS 认证后的请求）
-    void get(const QString& path, const std::function<void(const QByteArray&)>& callback);
+    void get(const QString& path,
+             const std::function<void(const QByteArray&)>& callback);
     void post(const QString& path, const QByteArray& body,
               const std::function<void(const QByteArray&)>& callback);
 
@@ -35,7 +34,18 @@ signals:
     void loginStatusChanged(bool loggedIn);
     void error(const QString& message);
 
+private slots:
+    void onRenewTimeout();
+
 private:
+    void acquireServiceTicket(const QString& service,
+                               const std::function<void(const QString&)>& callback);
+    void doGetWithST(const QString& path, const QString& st,
+                     const std::function<void(const QByteArray&)>& callback);
+    void doPostWithST(const QString& path, const QString& st,
+                      const QByteArray& body,
+                      const std::function<void(const QByteArray&)>& callback);
+
     class Private;
     Private* d;
 };

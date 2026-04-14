@@ -2,43 +2,33 @@
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkRequest>
 #include <QtNetwork/QNetworkReply>
-#include <QtNetwork/QNetworkCookieJar>
 #include <QtCore/QTimer>
-#include <QtCore/QUuid>
+#include <QtCore/QUrlQuery>
 
 namespace QtAuthNet {
 
 class CasSession::Private {
 public:
-    QString casUrl;                         // CAS 服务器地址，如 https://cas.example.com
-    QString service;                        // 当前应用的服务地址
-    QString tgt;                            // Ticket Granting Ticket
-    QString st;                             // Service Ticket（一次性）
+    QString casUrl;
+    QString tgt;
     QString username;
     bool loggedIn = false;
     QNetworkAccessManager* nam = nullptr;
-    QTimer* renewTimer = nullptr;           // 自动续期定时器
-    int renewIntervalSec = 3600;            // 默认 1 小时续期一次
+    QTimer* renewTimer = nullptr;
+    int renewIntervalSec = 3600;
+    QList<QPair<QNetworkReply*, std::function<void(const QByteArray&)>>> pendingCallbacks;
+    QList<QPair<QNetworkReply*, std::function<void(const QString&)>>> pendingStCallbacks;
+    QList<QPair<QNetworkReply*, std::function<void(bool)>>> pendingBoolCallbacks;
 
-    QMap<QNetworkReply*, std::function<void(const QByteArray&)>> pendingCallbacks;
-
-    QUrl buildCasUrl(const QString& path, const QVariantMap& params = QVariantMap()) const {
+    QUrl buildCasUrl(const QString& path) const {
         QString url = casUrl;
         if (!url.endsWith('/')) url += '/';
-        url += "v1/tickets"; // CAS 2.0 协议
+        url += "v1/tickets";
         if (!path.isEmpty()) {
             if (!path.startsWith('/')) url += '/';
             url += path;
         }
-        QUrl qurl(url);
-        if (!params.isEmpty()) {
-            QUrlQuery query;
-            for (auto it = params.constBegin(); it != params.constEnd(); ++it) {
-                query.addQueryItem(it.key(), it.value().toString());
-            }
-            qurl.setQuery(query);
-        }
-        return qurl;
+        return QUrl(url);
     }
 };
 
@@ -47,56 +37,54 @@ CasSession::CasSession(const QString& casUrl, QObject* parent)
 {
     d->casUrl = casUrl;
     d->nam = new QNetworkAccessManager(this);
-    d->tgt.clear();
-    d->loggedIn = false;
-
-    // 自动续期定时器
     d->renewTimer = new QTimer(this);
-    connect(d->renewTimer, &QTimer::timeout, this, &CasSession::renew);
+    connect(d->renewTimer, &QTimer::timeout, this, &CasSession::onRenewTimeout);
 }
 
-CasSession::~CasSession() {
-    d->renewTimer->stop();
+CasSession::~CasSession() { d->renewTimer->stop(); }
+
+void CasSession::onRenewTimeout() {
+    renew(nullptr);
 }
 
 void CasSession::login(const QString& username, const QString& password,
-                      const std::function<void(bool success)>& callback) {
+                       const std::function<void(bool)>& callback) {
     d->username = username;
-
-    // 第一步：获取 TGT (Ticket Granting Ticket)
     QUrl url = d->buildCasUrl("/" + username);
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
 
-    // CAS 2.0 POST 获取 TGT: username=xxx&password=xxx
     QUrlQuery body;
     body.addQueryItem(QStringLiteral("username"), username);
     body.addQueryItem(QStringLiteral("password"), password);
-    QByteArray bodyData = body.toString(QUrl::FullyEncoded).toUtf8();
 
-    QNetworkReply* reply = d->nam->post(request, bodyData);
+    QNetworkReply* reply = d->nam->post(request, body.toString(QUrl::FullyEncoded).toUtf8());
+    d->pendingBoolCallbacks.append({reply, callback});
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, callback]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        std::function<void(bool)> cb;
+        for (auto& pair : d->pendingBoolCallbacks) {
+            if (pair.first == reply) { cb = pair.second; break; }
+        }
+        d->pendingBoolCallbacks.removeAll({reply, cb});
         reply->deleteLater();
 
         if (reply->error() != QNetworkReply::NoError) {
-            emit error(QStringLiteral("CAS 登录请求失败: %1").arg(reply->errorString()));
-            callback(false);
+            emit error(QStringLiteral("CAS 登录失败: %1").arg(reply->errorString()));
+            if (cb) cb(false);
             return;
         }
 
-        // CAS 返回 TGT 的 URL，格式: https://cas.example.com/v1/tickets/TGT-xxx
         QUrl redirectUrl = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
-        QByteArray responseData = reply->readAll();
-        QString responseText = QString::fromUtf8(responseData);
-
-        // 从 Location header 或 body 中提取 TGT
         QString tgtUrl;
         if (redirectUrl.isValid()) {
             tgtUrl = redirectUrl.toString();
-        } else if (responseText.startsWith(QStringLiteral("TGT-"))) {
-            tgtUrl = d->casUrl + "/v1/tickets/" + responseText.trimmed();
+        } else {
+            QString resp = QString::fromUtf8(reply->readAll()).trimmed();
+            if (resp.contains("TGT-")) {
+                tgtUrl = d->casUrl + "/v1/tickets/" + resp;
+            }
         }
 
         if (tgtUrl.contains("TGT-")) {
@@ -104,10 +92,10 @@ void CasSession::login(const QString& username, const QString& password,
             d->loggedIn = true;
             d->renewTimer->start(d->renewIntervalSec * 1000);
             emit loginStatusChanged(true);
-            callback(true);
+            if (cb) cb(true);
         } else {
             emit error(QStringLiteral("CAS 登录失败: 无法获取 TGT"));
-            callback(false);
+            if (cb) cb(false);
         }
     });
 }
@@ -118,12 +106,7 @@ bool CasSession::isLoggedIn() const {
 
 void CasSession::logout() {
     if (d->tgt.isEmpty()) return;
-
-    // 向 CAS 服务器发送 DELETE 请求销毁 TGT
     QNetworkRequest request(d->tgt);
-    request.setHeader(QNetworkRequest::KnownHeaders::ContentTypeHeader,
-                      QStringLiteral("application/x-www-form-urlencoded"));
-
     QNetworkReply* reply = d->nam->deleteResource(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
@@ -139,89 +122,83 @@ void CasSession::renew(const std::function<void(bool)>& callback) {
         if (callback) callback(false);
         return;
     }
-
-    // 向 TGT 发送 POST 刷新寿命
     QNetworkRequest request(d->tgt);
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
-
     QNetworkReply* reply = d->nam->post(request, QByteArray());
+    d->pendingBoolCallbacks.append({reply, callback});
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, callback]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        std::function<void(bool)> cb;
+        for (auto& pair : d->pendingBoolCallbacks) {
+            if (pair.first == reply) { cb = pair.second; break; }
+        }
+        d->pendingBoolCallbacks.removeAll({reply, cb});
         reply->deleteLater();
         bool ok = (reply->error() == QNetworkReply::NoError);
         if (ok) {
-            d->renewTimer->start(d->renewIntervalSec * 1000); // 重置定时器
+            d->renewTimer->start(d->renewIntervalSec * 1000);
         } else {
-            // 续期失败，可能是 TGT 已过期，重新登录
             d->loggedIn = false;
             d->tgt.clear();
             d->renewTimer->stop();
             emit error(QStringLiteral("CAS 会话续期失败，需重新登录"));
             emit loginStatusChanged(false);
         }
-        if (callback) callback(ok);
+        if (cb) cb(ok);
     });
 }
 
 void CasSession::get(const QString& path,
-                    const std::function<void(const QByteArray&)>& callback) {
-    // 如果已登录，先获取 ST，再发起请求
-    if (isLoggedIn()) {
-        QString serviceUrl = d->buildCasUrl(path).toString();
-        acquireServiceTicket(serviceUrl, [this, callback](const QString& st) {
-            if (st.isEmpty()) {
-                if (callback) callback(QByteArray());
-                return;
-            }
-            doGetWithST(path, st, callback);
-        });
-    } else {
+                      const std::function<void(const QByteArray&)>& callback) {
+    if (!isLoggedIn()) {
         emit error(QStringLiteral("未登录，无法发起请求"));
         if (callback) callback(QByteArray());
+        return;
     }
+    QString serviceUrl = d->buildCasUrl(path).toString();
+    acquireServiceTicket(serviceUrl, [this, path, callback](const QString& st) {
+        if (st.isEmpty()) { if (callback) callback(QByteArray()); return; }
+        doGetWithST(path, st, callback);
+    });
 }
 
 void CasSession::post(const QString& path, const QByteArray& body,
-                     const std::function<void(const QByteArray&)>& callback) {
-    if (isLoggedIn()) {
-        QString serviceUrl = d->buildCasUrl(path).toString();
-        acquireServiceTicket(serviceUrl, [this, path, body, callback](const QString& st) {
-            if (st.isEmpty()) {
-                if (callback) callback(QByteArray());
-                return;
-            }
-            doPostWithST(path, st, body, callback);
-        });
-    } else {
+                      const std::function<void(const QByteArray&)>& callback) {
+    if (!isLoggedIn()) {
         emit error(QStringLiteral("未登录，无法发起请求"));
         if (callback) callback(QByteArray());
+        return;
     }
+    QString serviceUrl = d->buildCasUrl(path).toString();
+    acquireServiceTicket(serviceUrl, [this, path, body, callback](const QString& st) {
+        if (st.isEmpty()) { if (callback) callback(QByteArray()); return; }
+        doPostWithST(path, st, body, callback);
+    });
 }
 
 void CasSession::acquireServiceTicket(const QString& service,
-                                     const std::function<void(const QString& st)>& callback) {
-    // 从 TGT 获取一次性 Service Ticket
+                                       const std::function<void(const QString&)>& callback) {
     QNetworkRequest request(d->tgt);
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
-
     QUrlQuery body;
     body.addQueryItem(QStringLiteral("service"), service);
-    QByteArray bodyData = body.toString(QUrl::FullyEncoded).toUtf8();
+    QNetworkReply* reply = d->nam->post(request, body.toString(QUrl::FullyEncoded).toUtf8());
+    d->pendingStCallbacks.append({reply, callback});
 
-    QNetworkReply* reply = d->nam->post(request, bodyData);
-
-    connect(reply, &QNetworkReply::finished, this, [this, reply, callback]() {
-        QByteArray data = reply->readAll();
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        std::function<void(const QString&)> cb;
+        for (auto& pair : d->pendingStCallbacks) {
+            if (pair.first == reply) { cb = pair.second; break; }
+        }
+        d->pendingStCallbacks.removeAll({reply, cb});
         reply->deleteLater();
-
         if (reply->error() == QNetworkReply::NoError) {
-            QString st = QString::fromUtf8(data).trimmed();
-            callback(st);
+            if (cb) cb(QString::fromUtf8(reply->readAll()).trimmed());
         } else {
             emit error(QStringLiteral("获取 Service Ticket 失败: %1").arg(reply->errorString()));
-            callback(QString());
+            if (cb) cb(QString());
         }
     });
 }
@@ -234,23 +211,19 @@ void CasSession::doGetWithST(const QString& path, const QString& st,
     url.setQuery(query);
 
     QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::KnownHeaders::UserAgentHeader,
-                      QStringLiteral("QtAuthNet-CAS/1.0"));
-
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("QtAuthNet-CAS/1.0"));
     QNetworkReply* reply = d->nam->get(request);
+    d->pendingCallbacks.append({reply, callback});
 
-    auto wrapper = [this, reply, callback]() {
-        auto it = d->pendingCallbacks.find(reply);
-        if (it != d->pendingCallbacks.end()) {
-            std::function<void(const QByteArray&)> cb = it.value();
-            d->pendingCallbacks.erase(it);
-            cb(reply->readAll());
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        std::function<void(const QByteArray&)> cb;
+        for (auto& pair : d->pendingCallbacks) {
+            if (pair.first == reply) { cb = pair.second; break; }
         }
+        d->pendingCallbacks.removeAll({reply, cb});
         reply->deleteLater();
-    };
-
-    d->pendingCallbacks[reply] = callback;
-    connect(reply, &QNetworkReply::finished, this, wrapper);
+        if (cb) cb(reply->error() == QNetworkReply::NoError ? reply->readAll() : QByteArray());
+    });
 }
 
 void CasSession::doPostWithST(const QString& path, const QString& st,
@@ -264,21 +237,18 @@ void CasSession::doPostWithST(const QString& path, const QString& st,
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                      QStringLiteral("application/x-www-form-urlencoded"));
-
     QNetworkReply* reply = d->nam->post(request, body);
+    d->pendingCallbacks.append({reply, callback});
 
-    auto wrapper = [this, reply, callback]() {
-        auto it = d->pendingCallbacks.find(reply);
-        if (it != d->pendingCallbacks.end()) {
-            std::function<void(const QByteArray&)> cb = it.value();
-            d->pendingCallbacks.erase(it);
-            cb(reply->readAll());
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        std::function<void(const QByteArray&)> cb;
+        for (auto& pair : d->pendingCallbacks) {
+            if (pair.first == reply) { cb = pair.second; break; }
         }
+        d->pendingCallbacks.removeAll({reply, cb});
         reply->deleteLater();
-    };
-
-    d->pendingCallbacks[reply] = callback;
-    connect(reply, &QNetworkReply::finished, this, wrapper);
+        if (cb) cb(reply->error() == QNetworkReply::NoError ? reply->readAll() : QByteArray());
+    });
 }
 
 } // namespace QtAuthNet
