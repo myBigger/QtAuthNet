@@ -1,7 +1,9 @@
 QT = core network
 
+greaterThan(QT_MAJOR_VERSION, 5): QT += core5compat
+
 CONFIG += c++17
-CONFIG += console
+CONFIG += dll
 CONFIG -= app_bundle
 
 TARGET = QtAuthNet

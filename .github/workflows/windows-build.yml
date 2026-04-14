@@ -14,7 +14,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python (override WindowsApps stub)
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -23,17 +23,11 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: 6.7.0
+          version: 6.10.2
           host: windows
           target: desktop
           arch: win64_msvc2022_64
           cache: true
-
-      - name: Configure
-        shell: bash
-        run: |
-          export PATH="$QT_BIN_DIR:$PATH"
-          qmake -version
 
       - name: Build
         shell: bash
@@ -47,7 +41,7 @@ jobs:
         shell: bash
         run: |
           export PATH="$QT_BIN_DIR:$PATH"
-          windeployqt --release release/QtAuthNet.exe || echo "deploy done"
+          windeployqt --release release/QtAuthNet.dll 2>&1 || echo "done"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -65,7 +59,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: 6.7.0
+          version: 6.10.2
           host: linux
           target: desktop
           arch: linux_gcc_64
@@ -74,7 +68,7 @@ jobs:
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential libgl1-mesa-dev
 
-      - name: Configure and Build
+      - name: Build
         shell: bash
         run: |
           export PATH="$QT_BIN_DIR:$PATH"
