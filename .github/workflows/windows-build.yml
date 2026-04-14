@@ -1,4 +1,4 @@
-name: Windows Build
+name: Build
 
 on:
   push:
@@ -14,28 +14,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install aqtinstall
-        run: pip install aqtinstall
-
-      - name: Install Qt (Windows MinGW)
-        run: |
-          aqt install-qt windows desktop 6.7.0 win64_mingw -O C:\Qt
-          echo "C:\Qt\6.7.0\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Verify Qt
-        run: |
-          qmake -version
-          g++ --version
+      - name: Install Qt
+        uses: fremycompany/install-qt@v3
+        with:
+          version: "6.7.0"
+          tools: "Tools.Mingw64"
+          host: "windows"
+          target: "desktop"
+          arch: "win64_mingw"
+          install-deps: true
+          cache: true
 
       - name: Configure
-        run: qmake QtAuthNet.pro -spec win32-g++
+        shell: bash
+        run: |
+          export PATH="$Qt6_Dir/bin:$PATH"
+          qmake -version
+          qmake QtAuthNet.pro -spec win32-g++
 
       - name: Build
-        run: mingw32-make -j$env:NUMBER_OF_PROCESSORS
+        shell: bash
+        run: |
+          export PATH="$Qt6_Dir/bin:$PATH"
+          mingw32-make -j${{ env.NUMBER_OF_PROCESSORS }}
 
       - name: Deploy
+        shell: bash
         run: |
-          windeployqt --release release/QtAuthNet.exe || echo "windeployqt skipped (non-critical)"
+          export PATH="$Qt6_Dir/bin:$PATH"
+          windeployqt --release release/QtAuthNet.exe || echo "windeployqt done"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -50,25 +57,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install aqtinstall
-        run: pip install aqtinstall
-
-      - name: Install Qt (Linux)
-        run: |
-          aqt install-qt linux desktop 6.7.0 gcc_64 -O ${{ github.workspace }}/Qt
-          echo "${{ github.workspace }}/Qt/6.7.0/gcc_64/bin" >> $GITHUB_PATH
+      - name: Install Qt
+        uses: fremycompany/install-qt@v3
+        with:
+          version: "6.7.0"
+          host: "linux"
+          target: "desktop"
+          arch: "gcc_64"
+          install-deps: true
+          cache: true
 
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential libgl1-mesa-dev
 
-      - name: Verify Qt
-        run: qmake -version && g++ --version
-
       - name: Configure
-        run: qmake QtAuthNet.pro
+        shell: bash
+        run: |
+          export PATH="$Qt6_Dir/bin:$PATH"
+          qmake -version
+          qmake QtAuthNet.pro
 
       - name: Build
-        run: make -j${{ env.NUMBER_OF_PROCESSORS }}
+        shell: bash
+        run: |
+          export PATH="$Qt6_Dir/bin:$PATH"
+          make -j${{ env.NUMBER_OF_PROCESSORS }}
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
