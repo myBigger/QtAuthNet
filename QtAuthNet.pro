@@ -9,6 +9,8 @@ DESTDIR = release
 
 INCLUDEPATH += src
 
+DEFINES += QTAUTHNET_LIBRARY
+
 SOURCES += \
     src/qtauthnet.cpp \
     src/qtauthnet_client.cpp \
