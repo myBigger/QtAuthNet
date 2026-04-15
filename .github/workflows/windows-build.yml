@@ -14,13 +14,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Cache Qt
+        id: cache-qt
+        uses: actions/cache@v4
         with:
-          python-version: '3.12'
-          add-to-path: false
+          path: C:\Qt
+          key: qt-6102-msvc2022
 
-      - name: Install Qt
+      - name: Install Qt (if not cached)
+        if: steps.cache-qt.outputs.cache-hit != 'true'
         uses: jurplel/install-qt-action@v4
         with:
           version: 6.10.2
@@ -31,13 +33,16 @@ jobs:
 
       - name: Build
         shell: bash
+        env:
+          PATH: "${{ env.QT_BIN_DIR }}:${{ env.PATH }}"
         run: |
           export PATH="$QT_BIN_DIR:$PATH"
           mkdir -p release
           qmake QtAuthNet.pro -spec win32-msvc
-          nmake /NOLOGO 2>&1 || jom /NOLOGO 2>&1
+          nmake 2>&1 || jom 2>&1
 
       - name: Deploy
+        if: always()
         shell: bash
         run: |
           export PATH="$QT_BIN_DIR:$PATH"
