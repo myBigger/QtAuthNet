@@ -34,24 +34,19 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build
-        shell: bash
+        shell: powershell
         run: |
-          export PATH="$QT_BIN_DIR:$PATH"
-          qmake -version || echo "qmake not found"
-          mkdir -p release
-          qmake QtAuthNet.pro -spec win32-msvc || (
-            echo "qmake failed, checking Qt dir..."
-            ls "$QT_ROOT_DIR" 2>/dev/null || echo "Qt not at QT_ROOT_DIR"
-          )
-          nmake 2>&1 || jom 2>&1 || echo "make failed"
+          $env:Path = "$env:QT_BIN_DIR;$env:Path"
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          qmake QtAuthNet.pro -spec win32-msvc
+          nmake
 
       - name: Deploy
-        if: always()
+        if: success()
         shell: bash
         run: |
           export PATH="$QT_ROOT_DIR/bin:$PATH"
-          ls release/ 2>/dev/null || echo "no release dir"
-          windeployqt --release release/QtAuthNet.dll 2>&1 || echo "done"
+          windeployqt --release release/QtAuthNet.dll
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -59,6 +54,7 @@ jobs:
           name: QtAuthNet-Windows-x64
           path: release/
           retention-days: 30
+          if-no-files-found: error
 
   build-linux:
     runs-on: ubuntu-latest
@@ -92,3 +88,4 @@ jobs:
           name: QtAuthNet-Linux
           path: release/
           retention-days: 30
+          if-no-files-found: error
