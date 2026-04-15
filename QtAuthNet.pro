@@ -1,7 +1,7 @@
 QT = core network
 
 CONFIG += c++17
-CONFIG += dll
+TEMPLATE = lib
 CONFIG -= app_bundle
 
 TARGET = QtAuthNet
