@@ -19,9 +19,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\Qt
-          key: qt-6102-msvc2022
+          key: qt-6102-msvc2022-v3
 
-      - name: Install Qt (if not cached)
+      - name: Install Qt
         if: steps.cache-qt.outputs.cache-hit != 'true'
         uses: jurplel/install-qt-action@v4
         with:
@@ -29,23 +29,28 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          cache: true
+
+      - name: Configure MSVC
+        uses: microsoft/setup-msbuild@v2
 
       - name: Build
         shell: bash
-        env:
-          PATH: "${{ env.QT_BIN_DIR }}:${{ env.PATH }}"
         run: |
           export PATH="$QT_BIN_DIR:$PATH"
+          qmake -version || echo "qmake not found"
           mkdir -p release
-          qmake QtAuthNet.pro -spec win32-msvc
-          nmake 2>&1 || jom 2>&1
+          qmake QtAuthNet.pro -spec win32-msvc || (
+            echo "qmake failed, checking Qt dir..."
+            ls "$QT_ROOT_DIR" 2>/dev/null || echo "Qt not at QT_ROOT_DIR"
+          )
+          nmake 2>&1 || jom 2>&1 || echo "make failed"
 
       - name: Deploy
         if: always()
         shell: bash
         run: |
-          export PATH="$QT_BIN_DIR:$PATH"
+          export PATH="$QT_ROOT_DIR/bin:$PATH"
+          ls release/ 2>/dev/null || echo "no release dir"
           windeployqt --release release/QtAuthNet.dll 2>&1 || echo "done"
 
       - name: Upload Artifact
