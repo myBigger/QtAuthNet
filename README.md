@@ -159,6 +159,100 @@ session.login("username", "password", [&]() {
 - WebSocket（未来版本规划中）
 - 文件上传 / 下载进度跟踪（v2.0 规划中）
 
+---
+
+## QML 接口（v1.1 新增）
+
+从 v1.1 开始，QtAuthNet 提供原生 QML 接口，无需写 C++ 即可在 QML 中使用。
+
+### 安装
+
+```bash
+# 启用 QML 插件（需要 Qt5 Qml 或 Qt6 Qml 模块）
+cmake -B build -DQTAUTHNET_BUILD_QML_PLUGIN=ON
+cmake --build build
+sudo cmake --install build
+```
+
+### 快速开始
+
+```qml
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtAuthNet 1.0
+
+Client {
+    id: api
+    baseUrl: "https://api.example.com"
+    bearerToken: "your-token"
+
+    // 监听响应
+    onResponseReady: function(reqId, resp) {
+        if (resp.ok) {
+            console.log("数据:", resp.json)
+            resultText.text = JSON.stringify(resp.json, null, 2)
+        } else {
+            errorText.text = resp.errorMessage()
+        }
+    }
+    onError: function(msg) {
+        console.error("网络错误:", msg)
+    }
+
+    // 发起请求
+    Button {
+        text: "获取用户信息"
+        onClicked: api.get("/users/me")
+    }
+}
+```
+
+### ClientQml API
+
+| 属性 / 方法 | 类型 | 说明 |
+|------------|------|------|
+| `baseUrl` | string | API 基础地址 |
+| `bearerToken` | string | Bearer Token |
+| `basicUser` / `basicPass` | string | Basic Auth |
+| `apiKey` | string | API Key（配合 location）|
+| `timeout` | int | 请求超时（毫秒）|
+| `loading` | bool | 是否有请求进行中 |
+| `get(path)` | void | GET 请求 |
+| `postJson(path, json)` | void | POST JSON 请求 |
+| `post(path, body, contentType)` | void | POST 原始数据 |
+| `put(path, body, contentType)` | void | PUT 请求 |
+| `del(path)` | void | DELETE 请求 |
+| `cancel()` | void | 取消所有请求 |
+
+**信号：**
+
+| 信号 | 说明 |
+|------|------|
+| `responseReady(reqId, resp)` | 请求完成，`resp.statusCode` / `resp.ok` / `resp.json` |
+| `error(message)` | 网络或业务错误 |
+| `loadingChanged(loading)` | 加载状态变更 |
+| `tokenRefreshRequested()` | 收到 401，QML 侧应获取新 token 后调 `refreshToken(token)` |
+
+### CasSessionQml API
+
+| 属性 / 方法 | 类型 | 说明 |
+|------------|------|------|
+| `baseUrl` | string | CAS 服务器地址 |
+| `loggedIn` | bool | 登录状态 |
+| `username` | string | 当前用户名 |
+| `login(user, pass)` | void | CAS 登录 |
+| `logout()` | void | CAS 登出 |
+| `get(path)` | void | 发起需认证的 GET |
+| `postJson(path, json)` | void | 发起需认证的 POST JSON |
+
+**信号：**
+
+| 信号 | 说明 |
+|------|------|
+| `loginStatusChanged(loggedIn)` | 登录状态变更 |
+| `responseReady(reqId, resp)` | 业务请求响应 |
+| `error(message)` | 错误信息 |
+
 ## 许可证
 
 [MIT License](LICENSE) — 可自由用于商业和非商业项目。

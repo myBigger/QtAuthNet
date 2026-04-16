@@ -1,4 +1,4 @@
-#include "qtauthnet_session.h"
+#include <QtAuthNet/qtauthnet_session.h>
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkRequest>
 #include <QtNetwork/QNetworkReply>
@@ -7,14 +7,6 @@
 #include <QtCore/QUrlQuery>
 
 namespace QtAuthNet {
-
-// Register std::function types for QVariant use
-static void registerMetaTypes() {
-    qRegisterMetaType<std::function<void(const QByteArray&)>>();
-    qRegisterMetaType<std::function<void(const QString&)>>();
-    qRegisterMetaType<std::function<void(bool)>>();
-}
-Q_CONSTRUCTOR_FUNCTION(registerMetaTypes)
 
 class CasSession::Private {
 public:
@@ -25,6 +17,8 @@ public:
     QNetworkAccessManager* nam = nullptr;
     QTimer* renewTimer = nullptr;
     int renewIntervalSec = 3600;
+    StatusCallback statusCallback;
+    ErrorCallback errorCallback;
 
     QString buildCasUrl(const QString& path) const {
         QString url = casUrl;
@@ -49,13 +43,16 @@ CasSession::CasSession(const QString& casUrl, QObject* parent)
 
 CasSession::~CasSession() { d->renewTimer->stop(); }
 
+void CasSession::setStatusCallback(StatusCallback cb) { d->statusCallback = std::move(cb); }
+void CasSession::setErrorCallback(ErrorCallback cb) { d->errorCallback = std::move(cb); }
+
 void CasSession::onRenewTimeout() { renew(nullptr); }
 
 void CasSession::login(const QString& username, const QString& password,
                        const std::function<void(bool)>& callback) {
     d->username = username;
     QUrl url(d->buildCasUrl("/" + username));
-    QNetworkRequest request(url);
+    QNetworkRequest request{QUrl(url)};
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
 
@@ -64,21 +61,22 @@ void CasSession::login(const QString& username, const QString& password,
     body.addQueryItem(QStringLiteral("password"), password);
 
     QNetworkReply* reply = d->nam->post(request, body.toString(QUrl::FullyEncoded).toUtf8());
-    reply->setProperty("_boolCallback", QVariant::fromValue(callback));
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        auto cb = reply->property("_boolCallback").value<std::function<void(bool)>>();
+    connect(reply, &QNetworkReply::finished, this, [this, reply, callback]() {
         reply->deleteLater();
 
         if (reply->error() != QNetworkReply::NoError) {
-            emit error(QStringLiteral("CAS 登录失败: %1").arg(reply->errorString()));
-            cb(false); return;
+            if (d->errorCallback) d->errorCallback(
+                QStringLiteral("CAS 登录失败: %1").arg(reply->errorString()));
+            if (callback) callback(false);
+            return;
         }
 
         QUrl redirectUrl = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
         QString tgtUrl;
-        if (redirectUrl.isValid()) tgtUrl = redirectUrl.toString();
-        else {
+        if (redirectUrl.isValid()) {
+            tgtUrl = redirectUrl.toString();
+        } else {
             QString resp = QString::fromUtf8(reply->readAll()).trimmed();
             if (resp.contains("TGT-")) tgtUrl = d->casUrl + "/v1/tickets/" + resp;
         }
@@ -87,11 +85,11 @@ void CasSession::login(const QString& username, const QString& password,
             d->tgt = tgtUrl;
             d->loggedIn = true;
             d->renewTimer->start(d->renewIntervalSec * 1000);
-            emit loginStatusChanged(true);
-            cb(true);
+            if (d->statusCallback) d->statusCallback(true);
+            if (callback) callback(true);
         } else {
-            emit error(QStringLiteral("CAS 登录失败: 无法获取 TGT"));
-            cb(false);
+            if (d->errorCallback) d->errorCallback(QStringLiteral("CAS 登录失败: 无法获取 TGT"));
+            if (callback) callback(false);
         }
     });
 }
@@ -100,38 +98,43 @@ bool CasSession::isLoggedIn() const { return d->loggedIn && !d->tgt.isEmpty(); }
 
 void CasSession::logout() {
     if (d->tgt.isEmpty()) return;
-    QNetworkRequest request(d->tgt);
+    QNetworkRequest request{QUrl(d->tgt)};
     QNetworkReply* reply = d->nam->deleteResource(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         d->tgt.clear(); d->loggedIn = false; d->renewTimer->stop();
-        emit loginStatusChanged(false);
+        if (d->statusCallback) d->statusCallback(false);
     });
 }
 
 void CasSession::renew(const std::function<void(bool)>& callback) {
     if (d->tgt.isEmpty()) { if (callback) callback(false); return; }
-    QNetworkRequest request(d->tgt);
+    QNetworkRequest request{QUrl(d->tgt)};
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
     QNetworkReply* reply = d->nam->post(request, QByteArray());
-    reply->setProperty("_boolCallback", QVariant::fromValue(callback));
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        auto cb = reply->property("_boolCallback").value<std::function<void(bool)>>();
+    connect(reply, &QNetworkReply::finished, this, [this, reply, callback]() {
         reply->deleteLater();
         bool ok = (reply->error() == QNetworkReply::NoError);
-        if (ok) d->renewTimer->start(d->renewIntervalSec * 1000);
-        else { d->loggedIn = false; d->tgt.clear(); d->renewTimer->stop();
-               emit error(QStringLiteral("CAS 会话续期失败，需重新登录"));
-               emit loginStatusChanged(false); }
-        if (cb) cb(ok);
+        if (ok) {
+            d->renewTimer->start(d->renewIntervalSec * 1000);
+        } else {
+            d->loggedIn = false; d->tgt.clear(); d->renewTimer->stop();
+            if (d->errorCallback) d->errorCallback(QStringLiteral("CAS 会话续期失败，需重新登录"));
+            if (d->statusCallback) d->statusCallback(false);
+        }
+        if (callback) callback(ok);
     });
 }
 
 void CasSession::get(const QString& path,
-                      const std::function<void(const QByteArray&)>& callback) {
-    if (!isLoggedIn()) { emit error(QStringLiteral("未登录")); if (callback) callback(QByteArray()); return; }
+                     const std::function<void(const QByteArray&)>& callback) {
+    if (!isLoggedIn()) {
+        if (d->errorCallback) d->errorCallback(QStringLiteral("未登录"));
+        if (callback) callback(QByteArray());
+        return;
+    }
     acquireServiceTicket(d->buildCasUrl(path), [this, path, callback](const QString& st) {
         if (st.isEmpty()) { if (callback) callback(QByteArray()); return; }
         doGetWithST(path, st, callback);
@@ -140,7 +143,11 @@ void CasSession::get(const QString& path,
 
 void CasSession::post(const QString& path, const QByteArray& body,
                       const std::function<void(const QByteArray&)>& callback) {
-    if (!isLoggedIn()) { emit error(QStringLiteral("未登录")); if (callback) callback(QByteArray()); return; }
+    if (!isLoggedIn()) {
+        if (d->errorCallback) d->errorCallback(QStringLiteral("未登录"));
+        if (callback) callback(QByteArray());
+        return;
+    }
     acquireServiceTicket(d->buildCasUrl(path), [this, path, body, callback](const QString& st) {
         if (st.isEmpty()) { if (callback) callback(QByteArray()); return; }
         doPostWithST(path, st, body, callback);
@@ -148,54 +155,52 @@ void CasSession::post(const QString& path, const QByteArray& body,
 }
 
 void CasSession::acquireServiceTicket(const QString& service,
-                                      const std::function<void(const QString&)>& callback) {
-    QNetworkRequest request(d->tgt);
+                                       const std::function<void(const QString&)>& callback) {
+    QNetworkRequest request{QUrl(d->tgt)};
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
     QUrlQuery body; body.addQueryItem(QStringLiteral("service"), service);
     QNetworkReply* reply = d->nam->post(request, body.toString(QUrl::FullyEncoded).toUtf8());
-    reply->setProperty("_stCallback", QVariant::fromValue(callback));
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        auto cb = reply->property("_stCallback").value<std::function<void(const QString&)>>();
+    connect(reply, &QNetworkReply::finished, this, [this, reply, callback]() {
         reply->deleteLater();
         if (reply->error() == QNetworkReply::NoError)
-            cb(QString::fromUtf8(reply->readAll()).trimmed());
-        else { emit error(QStringLiteral("获取 Service Ticket 失败")); cb(QString()); }
+            callback(QString::fromUtf8(reply->readAll()).trimmed());
+        else {
+            if (d->errorCallback) d->errorCallback(
+                QStringLiteral("获取 Service Ticket 失败: %1").arg(reply->errorString()));
+            callback(QString());
+        }
     });
 }
 
 void CasSession::doGetWithST(const QString& path, const QString& st,
-                             const std::function<void(const QByteArray&)>& callback) {
-    QUrl url(d->buildCasUrl(path));
-    QUrlQuery q(url); q.addQueryItem(QStringLiteral("ticket"), st); url.setQuery(q);
-    QNetworkRequest request(url);
+                              const std::function<void(const QByteArray&)>& callback) {
+    QUrl url{d->buildCasUrl(path)};
+    QUrlQuery q{url}; q.addQueryItem(QStringLiteral("ticket"), st); url.setQuery(q);
+    QNetworkRequest request{url};
     request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("QtAuthNet-CAS/1.0"));
     QNetworkReply* reply = d->nam->get(request);
-    reply->setProperty("_dataCallback", QVariant::fromValue(callback));
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        auto cb = reply->property("_dataCallback").value<std::function<void(const QByteArray&)>>();
+    connect(reply, &QNetworkReply::finished, this, [reply, callback]() {
         reply->deleteLater();
-        cb(reply->error() == QNetworkReply::NoError ? reply->readAll() : QByteArray());
+        callback(reply->error() == QNetworkReply::NoError ? reply->readAll() : QByteArray());
     });
 }
 
 void CasSession::doPostWithST(const QString& path, const QString& st,
-                              const QByteArray& body,
-                              const std::function<void(const QByteArray&)>& callback) {
-    QUrl url(d->buildCasUrl(path));
-    QUrlQuery q(url); q.addQueryItem(QStringLiteral("ticket"), st); url.setQuery(q);
-    QNetworkRequest request(url);
+                               const QByteArray& body,
+                               const std::function<void(const QByteArray&)>& callback) {
+    QUrl url{d->buildCasUrl(path)};
+    QUrlQuery q{url}; q.addQueryItem(QStringLiteral("ticket"), st); url.setQuery(q);
+    QNetworkRequest request{url};
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
     QNetworkReply* reply = d->nam->post(request, body);
-    reply->setProperty("_dataCallback", QVariant::fromValue(callback));
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        auto cb = reply->property("_dataCallback").value<std::function<void(const QByteArray&)>>();
+    connect(reply, &QNetworkReply::finished, this, [reply, callback]() {
         reply->deleteLater();
-        cb(reply->error() == QNetworkReply::NoError ? reply->readAll() : QByteArray());
+        callback(reply->error() == QNetworkReply::NoError ? reply->readAll() : QByteArray());
     });
 }
 

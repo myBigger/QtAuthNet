@@ -1,5 +1,5 @@
 #pragma once
-#include "qtauthnet_global.h"
+#include <QtAuthNet/qtauthnet_global.h>
 
 namespace QtAuthNet {
 

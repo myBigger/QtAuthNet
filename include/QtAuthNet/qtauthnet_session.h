@@ -1,5 +1,5 @@
 #pragma once
-#include "qtauthnet_global.h"
+#include <QtAuthNet/qtauthnet_global.h>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -14,8 +14,12 @@ class QTimer;
 namespace QtAuthNet {
 
 class QTAUTHNET_EXPORT CasSession : public QObject {
-    Q_OBJECT
 public:
+    using StatusCallback = std::function<void(bool)>;
+    using ErrorCallback = std::function<void(const QString&)>;
+
+    void setStatusCallback(StatusCallback cb);
+    void setErrorCallback(ErrorCallback cb);
     explicit CasSession(const QString& casUrl, QObject* parent = nullptr);
     ~CasSession();
 
@@ -27,10 +31,6 @@ public:
     void get(const QString& path, const std::function<void(const QByteArray&)>& callback);
     void post(const QString& path, const QByteArray& body,
               const std::function<void(const QByteArray&)>& callback);
-
-signals:
-    void loginStatusChanged(bool loggedIn);
-    void error(const QString& message);
 
 private slots:
     void onRenewTimeout();

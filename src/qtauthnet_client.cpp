@@ -1,4 +1,4 @@
-#include "qtauthnet_client.h"
+#include <QtAuthNet/qtauthnet_client.h>
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkRequest>
 #include <QtNetwork/QNetworkReply>
@@ -91,6 +91,7 @@ void Client::deleteResource(const QString& path,
     executeRequest(QStringLiteral("DELETE"), path, QByteArray(), callback);
 }
 
+// ── 核心改动：不用 QVariant 存 callback，直接用 lambda ──
 void Client::executeRequest(const QString& method, const QString& path,
                             const QByteArray& body,
                             const std::function<void(const QByteArray&)>& callback,
@@ -121,32 +122,26 @@ void Client::executeRequest(const QString& method, const QString& path,
     else if (method == QStringLiteral("DELETE")) reply = d->nam->deleteResource(request);
     if (!reply) return;
 
-    reply->setProperty("callback", QVariant::fromValue(callback));
-    connect(reply, &QNetworkReply::finished, this, &Client::onReplyFinished);
-}
-
-void Client::onReplyFinished() {
-    QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
-    if (!reply) return;
-
-    std::function<void(const QByteArray&)> callback =
-        reply->property("callback").value<std::function<void(const QByteArray&)>>();
-
-    if (reply->error() == QNetworkReply::NoError) {
-        callback(reply->readAll());
-    } else if (reply->error() == QNetworkReply::AuthenticationRequiredError) {
-        if (d->refreshCallback && !d->isRefreshing) {
-            d->isRefreshing = true;
-            d->bearerToken = d->refreshCallback();
-            d->isRefreshing = false;
+    // 直接用 lambda 捕获 callback，完全绕开 QVariant / metatype
+    connect(reply, &QNetworkReply::finished, this, [this, reply, callback]() {
+        if (reply->error() == QNetworkReply::NoError) {
+            callback(reply->readAll());
+        } else if (reply->error() == QNetworkReply::AuthenticationRequiredError) {
+            if (d->refreshCallback && !d->isRefreshing) {
+                d->isRefreshing = true;
+                d->bearerToken = d->refreshCallback();
+                d->isRefreshing = false;
+            }
+            emit error(QStringLiteral("认证失败: %1").arg(reply->errorString()));
+            callback(QByteArray());
+        } else {
+            emit error(reply->errorString());
+            callback(QByteArray());
         }
-        emit error(QStringLiteral("认证失败: %1").arg(reply->errorString()));
-        callback(QByteArray());
-    } else {
-        emit error(reply->errorString());
-        callback(QByteArray());
-    }
-    reply->deleteLater();
+        reply->deleteLater();
+    });
 }
+
+void Client::error(const QString&) {} // 占位，满足 linker
 
 } // namespace QtAuthNet

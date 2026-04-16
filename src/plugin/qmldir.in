@@ -1,0 +1,2 @@
+module QtAuthNet
+plugin QtAuthNetQmlPlugin

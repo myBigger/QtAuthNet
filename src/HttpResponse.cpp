@@ -1,0 +1,1 @@
+#include <QtAuthNet/HttpResponse.h>

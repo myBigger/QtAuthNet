@@ -1,5 +1,5 @@
 #pragma once
-#include "qtauthnet_global.h"
+#include <QtAuthNet/qtauthnet_global.h>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 #include <QtCore/QMap>
@@ -11,7 +11,6 @@ class QNetworkReply;
 namespace QtAuthNet {
 
 class QTAUTHNET_EXPORT Client : public QObject {
-    Q_OBJECT
 public:
     explicit Client(const QString& baseUrl, QObject* parent = nullptr);
     ~Client();

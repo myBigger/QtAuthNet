@@ -1,0 +1,4 @@
+{
+    "module": "QtAuthNet",
+    "plugin": "QtAuthNetQmlPlugin"
+}
